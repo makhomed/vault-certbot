@@ -1,0 +1,129 @@
+#!/usr/bin/python3 -u
+
+
+__license__ = "GNU Affero General Public License, version 3.0 or later"
+__contact__ = "https://github.com/makhomed/vault-certbot"
+__version__ = "1.0.0"
+
+
+from pathlib import Path
+
+import hvac
+import os
+import sys
+import signal
+import logging
+import logging.handlers
+import time
+
+from common import runtime_dir, configuration, tasks, tomllib, debug, Vault
+
+args = None
+
+service = None
+
+root_logger_level = logging.DEBUG if debug else logging.INFO
+
+def register_exit_signal_handlers(): # {{{
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT): signal.signal(sig, lambda signum, frame: sys.exit(0))
+# }}}
+
+def parse_command_line_common_args(): # {{{
+    global args
+    args = sys.argv[1:]
+    while True:
+        if '--debug' not in args: break
+        global root_logger_level
+        root_logger_level = logging.DEBUG
+        args.remove('--debug')
+    while True:
+        if 'service' not in args: break
+        global service
+        service = True
+        args.remove('service')
+# }}}
+
+def configure_logging(): # {{{
+    """
+        log = logging.getLogger(__name__)
+
+        log.debug(msg)
+        log.info(msg)
+        log.warning(msg)
+        log.error(msg)
+        log.critical(msg)
+    """
+    instance_logfile = runtime_dir / 'var/service.log'
+    instance_logfile.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    root_logger = logging.getLogger("")
+    root_logger.setLevel(root_logger_level)
+
+    log_file_log_formatter = logging.Formatter('%(asctime)s %(levelname)-7s pid=%(process)d | %(name)s | %(module)s:%(lineno)d | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    log_file_log_handler = logging.handlers.RotatingFileHandler(instance_logfile, maxBytes=1*1024*1024, backupCount=9)
+    log_file_log_handler.setFormatter(log_file_log_formatter)
+    root_logger.addHandler(log_file_log_handler)
+
+    console_log_formatter = logging.Formatter('%(message)s')
+    console_log_handler = logging.StreamHandler()
+    console_log_handler.setFormatter(console_log_formatter)
+    console_log_handler.setLevel(logging.INFO)
+    root_logger.addHandler(console_log_handler)
+
+    logging.getLogger("paramiko.transport").setLevel(logging.CRITICAL)
+    logging.getLogger("paramiko").setLevel(logging.INFO)
+    logging.getLogger("requests").setLevel(logging.INFO)
+    logging.getLogger("urllib3").setLevel(logging.INFO)
+    # logging.getLogger("requests").setLevel(logging.DEBUG)
+    # logging.getLogger("urllib3").setLevel(logging.DEBUG)
+    logging.getLogger("fabric").setLevel(logging.INFO)
+    logging.getLogger("invoke").setLevel(logging.INFO)
+    logging.getLogger("lockfile").setLevel(logging.INFO)
+    # }}}
+
+log = logging.getLogger(__name__)
+
+def run_deploy_hook():
+    renewed_lineage = os.environ.get("RENEWED_LINEAGE")
+    renewed_domains = os.environ.get("RENEWED_DOMAINS")
+    if renewed_lineage is None or renewed_domains is None:
+        print('\n\trun in certbot deploy-hook mode\n\n\tenvironment variables RENEWED_LINEAGE and RENEWED_DOMAINS must be defined\n')
+        sys.exit(2)
+    else:
+        tasks.put(dict(renewed_lineage=renewed_lineage, renewed_domains=renewed_domains))
+        sys.exit(0)
+
+
+def process(task):
+    renewed_lineage = task['renewed_lineage']
+    renewed_domains = task['renewed_domains']
+    while True:
+        try:
+            domain_dir = Path(renewed_lineage)
+            fullchain_pem_file = domain_dir / 'fullchain.pem'
+            privkey_pem_file = domain_dir / 'privkey.pem'
+            fullchain_pem = fullchain_pem_file.read_text(encoding='utf-8', errors='strict')
+            privkey_pem = privkey_pem_file.read_text(encoding='utf-8', errors='strict')
+            name = domain_dir.name
+            data = dict(fullchain_pem=fullchain_pem, privkey_pem=privkey_pem)
+            vault = Vault()
+            vault.save_certificate(name, data)
+            return
+        except Exception as exc:
+            log.error(f'error processing task {renewed_lineage} {renewed_domains}', exc_info=exc)
+            time.sleep(60)
+
+def run_service():
+    while True:
+        task = tasks.get()
+        process(task)
+        tasks.task_done()
+
+if __name__ == "__main__":
+    register_exit_signal_handlers()
+    parse_command_line_common_args()
+    configure_logging()
+    if service:
+        run_service()
+    else:
+        run_deploy_hook()

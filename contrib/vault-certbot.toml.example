@@ -1,0 +1,5 @@
+
+vault-proxy-socket = "/run/vault-proxy-infraops.sock"
+
+vault-mount-point = "certificate"
+

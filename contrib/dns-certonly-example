@@ -1,0 +1,9 @@
+#!/bin/bash
+
+DOMAIN=example.com
+
+certbot certonly --dns-cloudflare \
+    --dns-cloudflare-propagation-seconds=20 \
+    --dns-cloudflare-credentials=/etc/letsencrypt/dns-cloudflare-${DOMAIN}.ini \
+    --deploy-hook /opt/vault-certbot/vault-certbot \
+    --domain ${DOMAIN},\*.${DOMAIN}
