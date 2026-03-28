@@ -69,23 +69,34 @@ class Vault:
         except hvac.exceptions.VaultError as exc:
             raise RuntimeError("Vault client is not authenticated") from exc
 
-    def save_certificate(self, name, data):
+    def put_certificate(self, cert_name, data):
         assert isinstance(data, dict)
         mount_point=configuration['vault-mount-point']
-        path = name
+        path = f'live/{cert_name}'
         secret = data
         self.client.secrets.kv.v1.create_or_update_secret(mount_point=mount_point, path=path, secret=secret)
 
-    def delete_certificate(self, name):
+    def get_certificate(self, cert_name):
         mount_point=configuration['vault-mount-point']
-        path = name
+        path = f'live/{cert_name}'
+        secret = self.client.secrets.kv.v1.read_secret(path=path, mount_point=mount_point)
+        fullchain_pem = secret['data']['fullchain_pem']
+        privkey_pem   = secret['data']['privkey_pem']
+        return dict(fullchain_pem=fullchain_pem, privkey_pem=privkey_pem)
+
+    def get_certificate_servers(self, cert_name):
+        mount_point=configuration['vault-mount-point']
+        path = f'config/{cert_name}'
         try:
-            self.client.secrets.kv.v1.delete_secret(mount_point=mount_point, path=path)
-        except hvac.exceptions.InvalidPath:
-            pass
+            secret = self.client.secrets.kv.v1.read_secret(path=path, mount_point=mount_point)
+            servers = secret['data']['servers']
+            assert isinstance(servers, list)
+            return servers
+        except hvac.exceptions.VaultError as exc:
+            return list()
 
 if __name__ == '__main__':
-    vault = Vault()
-    data = vault.client.secrets.kv.v1.list_secrets(mount_point=configuration['vault-mount-point'], path='')
     from pprint import pprint
-    pprint(data['data']['keys'])
+    vault = Vault()
+    pprint(vault.client.secrets.kv.v1.list_secrets(mount_point=configuration['vault-mount-point'], path='config')['data']['keys'])
+    pprint(vault.client.secrets.kv.v1.list_secrets(mount_point=configuration['vault-mount-point'], path='live')['data']['keys'])
